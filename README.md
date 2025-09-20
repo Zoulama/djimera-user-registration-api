@@ -100,6 +100,7 @@ Get the project running with just two Makefile commands:
 - `make up` - Start all services
 - `make stop` - Stop services (keep containers)
 - `make down` - Stop and remove all containers
+- `make test-user-service` - Run a test for user service
 
 ## Quick Test
 
