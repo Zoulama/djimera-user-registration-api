@@ -1,0 +1,145 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: dailymotion-postgres
+    environment:
+      POSTGRES_DB: dailymotion_users
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dailymotion_users"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dailymotion-net
+
+  # RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: dailymotion-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - dailymotion-net
+
+  # Mock Email Service (for testing)
+  email-service:
+    image: mailhog/mailhog:latest
+    container_name: dailymotion-email-service
+    ports:
+      - "1025:1025" # SMTP port
+      - "8025:8025" # Web UI port
+    networks:
+      - dailymotion-net
+
+  # Main Application
+  app:
+    build: .
+    container_name: dailymotion-user-api
+    environment:
+      # Database
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: dailymotion_users
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: postgres
+      
+      # RabbitMQ
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      
+      # Email Service
+      EMAIL_SERVICE_URL: http://email-service:8025/api/v1/messages
+      
+      # Application
+      LOG_LEVEL: INFO
+      DEBUG: "false"
+      SECRET_KEY: dailymotion-production-secret-key-change-this
+      
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - dailymotion-net
+    restart: unless-stopped
+
+  # Email Consumer
+  email-consumer:
+    build: .
+    container_name: dailymotion-email-consumer
+    environment:
+      # Database
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: dailymotion_users
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: postgres
+      
+      # RabbitMQ
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      
+      # Email Service
+      EMAIL_SERVICE_URL: http://email-service:8025/api/v1/messages
+      
+      # Application
+      LOG_LEVEL: INFO
+      DEBUG: "false"
+      
+    command: ["python", "scripts/email_consumer.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - dailymotion-net
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+networks:
+  dailymotion-net:
+    driver: bridge
